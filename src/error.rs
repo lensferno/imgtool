@@ -3,31 +3,6 @@ use std::num::{ParseFloatError, ParseIntError};
 use std::str::ParseBoolError;
 
 #[derive(Debug)]
-pub struct IOError {
-    msg: String,
-}
-
-impl IOError {
-    pub fn new(msg: String) -> Self {
-        Self { msg }
-    }
-}
-
-impl error::Error for IOError {}
-
-impl fmt::Display for IOError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "IOError: {}", self.msg)
-    }
-}
-
-impl From<io::Error> for IOError {
-    fn from(err: io::Error) -> Self {
-        Self::new(format!("{}", err))
-    }
-}
-
-#[derive(Debug)]
 pub struct ImageProcessError {
     msg: String,
 }

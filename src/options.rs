@@ -37,7 +37,7 @@ impl str::FromStr for OutputFormatTypes {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "jpeg" => Ok(Self::Jpeg),
+            "jpeg" | "jpg" => Ok(Self::Jpeg),
             "png" => Ok(Self::Png),
             "gif" => Ok(Self::Gif),
             "webp" => Ok(Self::WebP),
@@ -534,13 +534,17 @@ pub struct CliOptions {
     #[structopt(short, long)]
     pub input: PathBuf,
 
-    /// Output file or directory. If not set, keep same to the source. If the input is a file, the output should also be a file.
+    /// Output file or directory.
     #[structopt(short, long)]
-    pub output: Option<PathBuf>,
+    pub output: PathBuf,
 
     /// Prefix of output file, if not set, the filename of the output file is same to the origin file.
     #[structopt(short, long)]
     pub prefix: Option<String>,
+
+    /// Suffix of output file, if not set, the filename of the output file is same to the origin file.
+    #[structopt(short, long)]
+    pub suffix: Option<String>,
 
     /// Just print the processing plan, no output file
     #[structopt(long)]
@@ -554,10 +558,8 @@ pub struct CliOptions {
     #[structopt(long)]
     pub skip_if_bigger: bool,
 
-    // /// Max bytes of output file. If not set, means no limit.
-    // #[structopt(long)]
-    // pub max_file_size: Option<u32>,
-    /// Output format, if not set, keep same to the original image
+    /// Output format, if not set, keep same to the original image.
+    /// Available values: [jpg, jpeg, png, gif, webp, tiff]
     #[structopt(short, long)]
     pub target_format: Option<OutputFormatTypes>,
 

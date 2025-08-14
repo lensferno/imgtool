@@ -1,70 +1,26 @@
-use crate::error::{IOError, ImageProcessError};
+use crate::error::ImageProcessError;
 use crate::options::{CliOptions, ResizeArgs, ResizeRule};
 use caesium::parameters::CSParameters;
 use caesium::SupportedFileTypes;
 use image::ImageReader;
 use std::fs;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct RunConfiguration {
-    input_files: Vec<PathBuf>,
-    output_file_or_dir: PathBuf,
-
     target_format: Option<SupportedFileTypes>,
     caesium_parameters: CSParameters,
 
     options: CliOptions,
 }
 
-impl TryFrom<CliOptions> for RunConfiguration {
-    type Error = IOError;
-
-    fn try_from(options: CliOptions) -> Result<Self, Self::Error> {
-        let mut run_configuration = Self {
-            input_files: Vec::new(),
-            output_file_or_dir: PathBuf::new(),
-
-            target_format: None,
+impl From<CliOptions> for RunConfiguration {
+    fn from(options: CliOptions) -> Self {
+        Self {
+            target_format: options.target_format.map_or(None, |v| Some(v.into())),
             caesium_parameters: options.clone().into(),
-
             options,
-        };
-
-        let opt = run_configuration.options.clone();
-
-        let input = opt.input;
-        if input.is_file() {
-            run_configuration.input_files.push(input.clone());
-        } else {
-            for entry in fs::read_dir(&input)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_file() {
-                    run_configuration.input_files.push(path);
-                }
-            }
         }
-
-        let output = opt.output.map_or(input.clone(), |output| output);
-        if run_configuration.input_files.len() > 1 {
-            if output.exists() {
-                if !output.is_dir() {
-                    return Err(IOError::new(format!(
-                        "When input is a dir, output should also be a dir, but given a file: {}",
-                        output.to_str().unwrap_or("")
-                    )));
-                }
-            } else {
-               fs::create_dir_all(&run_configuration.output_file_or_dir)?
-            }
-        }
-
-        run_configuration.output_file_or_dir = output;
-
-        run_configuration.target_format = opt.target_format.map_or(None, |v| Some(v.into()));
-
-        Ok(run_configuration)
     }
 }
 
@@ -81,10 +37,53 @@ impl From<RunConfiguration> for Runner {
 impl Runner {
     pub fn run(&self) -> Result<(), ImageProcessError> {
         let run_configuration = &self.run_configuration;
+        let options = &self.run_configuration.options;
 
-        let input_files = &run_configuration.input_files;
+        let input = &options.input;
+        if !input.exists() {
+            return Err(ImageProcessError::new(format!(
+                "File or dir not exists: {}",
+                input.to_string_lossy()
+            )));
+        }
+
+        let output = options.output.clone();
+
+        // Just run once for file input.
+        if input.is_file() {
+            let output_file = if output.is_dir() {
+                Self::make_path(&input, &output, &options.prefix, &options.suffix)
+            } else {
+                output
+            };
+
+            return Self::run_process(&input, &output_file, run_configuration);
+        }
+
+        // Batch process
+
+        // If input is dir, the output should be also a dir
+        if !output.exists() {
+            fs::create_dir_all(&output).map_err(|e| ImageProcessError::new(e.to_string()))?
+        } else if output.is_file() {
+            return Err(ImageProcessError::new(format!(
+                "When input is a dir, output should also be a dir, but given a file: {}",
+                output.to_str().unwrap_or("")
+            )));
+        }
+
+        let input_files: Vec<PathBuf> = fs::read_dir(&input)?
+            .filter_map(|e| e.ok())
+            .map(|dir_entry| dir_entry.path())
+            .filter_map(|path| if path.is_file() { Some(path) } else { None })
+            .collect();
+
+        let output_dir = output;
         for input_file in input_files {
-            let result = Self::run_process(input_file, run_configuration);
+            let output_file =
+                Self::make_path(&input_file, &output_dir, &options.prefix, &options.suffix);
+
+            let result = Self::run_process(&input_file, &output_file, run_configuration);
             if let Err(err) = result {
                 if !run_configuration.options.continue_on_error {
                     return Err(err);
@@ -97,8 +96,53 @@ impl Runner {
         Ok(())
     }
 
+    fn make_path(
+        input_file: &PathBuf,
+        output_dir: &PathBuf,
+        prefix: &Option<String>,
+        suffix: &Option<String>,
+    ) -> PathBuf {
+        input_file
+            .file_name()
+            .map(|filename| filename.to_string_lossy().to_string())
+            .map(|filename| match prefix {
+                None => filename,
+                Some(prefix) => format!("{}{}", prefix, filename),
+            })
+            .map(|filename| match suffix {
+                None => filename,
+                Some(suffix) => {
+                    let parted_filename = Self::get_parted_filename(&filename);
+                    match parted_filename.1 {
+                        None => format!("{}{}", filename, suffix),
+                        Some(ext) => format!("{}{}.{}", parted_filename.0, suffix, ext),
+                    }
+                }
+            })
+            .map(|filename| output_dir.join(filename))
+            .unwrap()
+    }
+
+    fn get_parted_filename(filename: &String) -> (String, Option<String>) {
+        if filename == "" {
+            return ("".to_string(), None);
+        }
+
+        let path = Path::new(filename);
+        let stem = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string())
+            .unwrap();
+        let ext = path
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_string());
+
+        (stem, ext)
+    }
+
     fn run_process(
         input_file: &PathBuf,
+        output_file: &PathBuf,
         run_configuration: &RunConfiguration,
     ) -> Result<(), ImageProcessError> {
         let options = &run_configuration.options;
@@ -115,7 +159,7 @@ impl Runner {
         let compressed = match &run_configuration.target_format {
             None => caesium::compress_in_memory(origin_data, &caesium_parameters),
             Some(format) => {
-                // file.clone()...?
+                // origin_data.clone()...?
                 let convert_result = caesium::convert_in_memory(
                     origin_data.clone(),
                     &caesium_parameters,
@@ -138,21 +182,6 @@ impl Runner {
         if options.delete_origin {
             fs::remove_file(&input_file).map_err(|e| ImageProcessError::from(e))?;
         }
-
-        let output_file_or_dir = &run_configuration.output_file_or_dir;
-        let output_file = if output_file_or_dir.is_dir() {
-            input_file
-                .file_name()
-                .map(|filename| filename.to_string_lossy().to_string())
-                .map(|filename| match &options.prefix {
-                    Some(prefix) => format!("{}{}", prefix, filename),
-                    None => filename.to_string(),
-                })
-                .map(|filename| output_file_or_dir.join(filename))
-                .unwrap()
-        } else {
-            output_file_or_dir.clone()
-        };
 
         Ok(fs::write(output_file, &compressed).map_err(|e| ImageProcessError::from(e))?)
     }
