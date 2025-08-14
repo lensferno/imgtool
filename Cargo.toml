@@ -1,0 +1,10 @@
+[package]
+name = "imgtool"
+version = "0.1.0"
+edition = "2024"
+description = "A simple cli tool to compress and convert images based on libcaesium."
+
+[dependencies]
+image = "0.25.6"
+libcaesium = "0.17.4"
+structopt = "0.3.26"
