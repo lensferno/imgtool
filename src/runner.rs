@@ -2,9 +2,7 @@ use crate::error::ImageProcessError;
 use crate::options::{CliOptions, ResizeArgs, ResizeRule};
 use caesium::parameters::CSParameters;
 use caesium::SupportedFileTypes;
-use image::ImageReader;
 use std::fs;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 pub struct RunConfiguration {
@@ -189,14 +187,13 @@ impl Runner {
     fn set_scaled_size(
         caesium_parameters: &mut CSParameters,
         resize_args: &ResizeArgs,
-        file: &Vec<u8>,
+        data: &Vec<u8>,
     ) -> Result<(), ImageProcessError> {
-        let image_reader = ImageReader::new(Cursor::new(file));
-        let image = image_reader.with_guessed_format()?.decode();
-        let image = image.map_err(|e| ImageProcessError::new(e.to_string()))?;
+        let image_size =
+            imagesize::blob_size(data).map_err(|e| ImageProcessError::new(e.to_string()))?;
 
-        let origin_width = image.width();
-        let origin_height = image.height();
+        let origin_width = image_size.width;
+        let origin_height = image_size.height;
 
         match resize_args.rule {
             ResizeRule::Size => {
@@ -236,13 +233,13 @@ impl Runner {
             ResizeRule::Width => {
                 caesium_parameters.width = resize_args.width as u32;
                 if !resize_args.keep_aspect_ratio {
-                    caesium_parameters.height = origin_height;
+                    caesium_parameters.height = origin_height as u32;
                 }
             }
             ResizeRule::Height => {
                 caesium_parameters.height = resize_args.height as u32;
                 if !resize_args.keep_aspect_ratio {
-                    caesium_parameters.width = origin_width;
+                    caesium_parameters.width = origin_width as u32;
                 }
             }
             _ => {}
